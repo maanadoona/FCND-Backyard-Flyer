@@ -23,9 +23,14 @@ class BackyardFlyer(Drone):
     def __init__(self, connection):
         super().__init__(connection)
         self.target_position = np.array([0.0, 0.0, 0.0])
-        self.all_waypoints = []
+        self.all_waypoints = [(10, 0, 5, 0),
+                              (10, 10, 5, 0),
+                              (0, 10, 5, 0),
+                              (0, 0, 5, 0)]
         self.in_mission = True
-        self.check_state = {}
+        # 4 steps-checkstate in waypoints
+        self.check_state = {0: False, 1: False, 2: False, 3: False}
+        self.step = 0
 
         # initial state
         self.flight_state = States.MANUAL
@@ -41,7 +46,16 @@ class BackyardFlyer(Drone):
 
         This triggers when `MsgID.LOCAL_POSITION` is received and self.local_position contains new data
         """
-        pass
+        if self.flight_state == States.TAKEOFF:
+            if self.step in self.check_state.keys():
+                if self.check_state[self.step] == True:  # If drone reachs to the target waypoint, move to next step.
+                    if abs(self.target_position[0] - self.local_position[0]) < 0.5 and abs(
+                            self.target_position[1] - self.local_position[1]) < 0.5:
+                        print("Target Position:" + str(self.target_position))
+                        print("Stopped Position:" + str(self.local_position))
+                        print("Diff North:" + str(self.target_position[0] - self.local_position[0]))
+                        print("Diff East:" + str(self.target_position[1] - self.local_position[1]))
+                        self.step += 1
 
     def velocity_callback(self):
         """
@@ -49,7 +63,10 @@ class BackyardFlyer(Drone):
 
         This triggers when `MsgID.LOCAL_VELOCITY` is received and self.local_velocity contains new data
         """
-        pass
+        if self.flight_state == States.LANDING:
+            if ((self.global_position[2] - self.global_home[2] < 0.1) and
+                    abs(self.local_position[2]) < 0.01):
+                self.disarming_transition()
 
     def state_callback(self):
         """
@@ -57,61 +74,98 @@ class BackyardFlyer(Drone):
 
         This triggers when `MsgID.STATE` is received and self.armed and self.guided contain new data
         """
-        pass
+        if not self.in_mission:
+            return
+        if self.flight_state == States.MANUAL:
+            self.arming_transition()
+        elif self.flight_state == States.ARMING:
+            self.takeoff_transition()
+        elif self.flight_state == States.TAKEOFF:
+            self.waypoint_transition()
+        elif self.flight_state == States.WAYPOINT:
+            self.landing_transition()
+        elif self.flight_state == States.LANDING:
+            self.disarming_transition()
+        elif self.flight_state == States.DISARMING:
+            self.manual_transition()
 
     def calculate_box(self):
         """TODO: Fill out this method
-        
+
         1. Return waypoints to fly a box
         """
-        pass
+        self.target_position = self.all_waypoints[self.step][:3]  # set the target position
+        return self.all_waypoints[self.step]
 
     def arming_transition(self):
         """TODO: Fill out this method
-        
+
         1. Take control of the drone
         2. Pass an arming command
         3. Set the home location to current position
         4. Transition to the ARMING state
         """
         print("arming transition")
+        self.take_control()
+        self.arm()
+
+        # set the current location to be the home position
+        self.set_home_position(self.global_position[0],
+                               self.global_position[1],
+                               self.global_position[2])
+
+        self.flight_state = States.ARMING
 
     def takeoff_transition(self):
         """TODO: Fill out this method
-        
+
         1. Set target_position altitude to 3.0m
         2. Command a takeoff to 3.0m
         3. Transition to the TAKEOFF state
         """
         print("takeoff transition")
+        target_altitude = 3.0
+        self.target_position[2] = target_altitude
+        self.takeoff(target_altitude)
+        self.flight_state = States.TAKEOFF
 
     def waypoint_transition(self):
         """TODO: Fill out this method
-    
+
         1. Command the next waypoint position
         2. Transition to WAYPOINT state
         """
         print("waypoint transition")
+        if self.step == 4:  # After last movement, go landing
+            self.flight_state = States.WAYPOINT
+        else:
+            if self.check_state[self.step] == False:
+                self.check_state[self.step] = True
+                self.cmd_position(*self.calculate_box())
 
     def landing_transition(self):
         """TODO: Fill out this method
-        
+
         1. Command the drone to land
         2. Transition to the LANDING state
         """
         print("landing transition")
+        self.land()
+        self.flight_state = States.LANDING
 
     def disarming_transition(self):
         """TODO: Fill out this method
-        
+
         1. Command the drone to disarm
         2. Transition to the DISARMING state
         """
         print("disarm transition")
+        self.disarm()
+        self.flight_state = States.DISARMING
 
     def manual_transition(self):
         """This method is provided
-        
+
         1. Release control of the drone
         2. Stop the connection (and telemetry log)
         3. End the mission
@@ -126,7 +180,7 @@ class BackyardFlyer(Drone):
 
     def start(self):
         """This method is provided
-        
+
         1. Open a log file
         2. Start the drone connection
         3. Close the log file
@@ -146,7 +200,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     conn = MavlinkConnection('tcp:{0}:{1}'.format(args.host, args.port), threaded=False, PX4=False)
-    #conn = WebSocketConnection('ws://{0}:{1}'.format(args.host, args.port))
+    # conn = WebSocketConnection('ws://{0}:{1}'.format(args.host, args.port))
     drone = BackyardFlyer(conn)
     time.sleep(2)
     drone.start()
